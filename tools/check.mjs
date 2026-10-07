@@ -17,6 +17,8 @@ export const MAX_DRIVER_FILES = 2;
 export const DRIVER_FILES = ["driver.json", "index.mjs"];
 export const META_FILES = ["PROVENANCE.json", "RESULT.json"];
 export const ALLOWED_FILES = [...DRIVER_FILES, ...META_FILES];
+/** The one file outside shops/ a PR may change, and only on its own (the shop builder's Claude Code subagent). */
+export const BUILDER_AGENT_FILE = ".claude/agents/driver-builder.md";
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 
 /** @typedef {{ file: string, code: string, message: string, fix: string }} Problem */
@@ -362,6 +364,9 @@ export function checkFolder(dir, label = dir) {
  * @param {string[]} names
  */
 export function checkDiffNames(names) {
+  // A maintainer PR that changes only the builder's subagent definition is not a shop PR: it is allowed alone, and never next to shop files.
+  const listed = names.map((n) => n.replace(/\r$/, "")).filter((n) => n.trim());
+  if (listed.length === 1 && listed[0] === BUILDER_AGENT_FILE) return { ok: true, domains: [], problems: [] };
   const problems = [];
   const add = (file, code, message, fix) => problems.push({ file, code, message, fix });
   const domains = new Set();

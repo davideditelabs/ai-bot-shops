@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { REPO, editJson, makeLib, read, remove, withCode, write } from "./helpers.mjs";
@@ -251,6 +251,28 @@ test("diff names: files inside one shop folder pass", () => {
   assert.equal(r.ok, true);
   assert.deepEqual(r.domains, ["example.com"]);
   assert.equal(checkDiffNames([]).ok, true);
+});
+
+test("diff names: the builder's subagent file passes on its own, and only on its own", () => {
+  const agent = ".claude/agents/driver-builder.md";
+  assert.equal(checkDiffNames([agent]).ok, true);
+  assert.equal(checkDiffNames([agent, ""]).ok, true);
+  for (const names of [[agent, "shops/example.com/index.mjs"], [agent, "README.md"], [".claude/agents/other.md"], [".claude/settings.json"], [agent, agent + "x"]]) {
+    const r = checkDiffNames(names);
+    assert.equal(r.ok, false, names.join(","));
+    assert.ok(r.problems.some((p) => p.code === "diff-outside"));
+  }
+});
+
+test("the builder's subagent file: Sonnet 5.5, the tools it needs, no way to publish", () => {
+  const src = readFileSync(join(REPO, ".claude", "agents", "driver-builder.md"), "utf8");
+  const [, front, body] = src.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
+  const field = (k) => front.match(new RegExp(`^${k}:\\s*(.+)$`, "m"))?.[1].trim();
+  assert.equal(field("name"), "driver-builder");
+  assert.equal(field("model"), "claude-sonnet-5-5");
+  assert.ok(field("description").length > 20);
+  assert.deepEqual(field("tools").split(/\s*,\s*/), ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "WebFetch"]);
+  for (const must of ["node tools/check.mjs shops/<domain>", "node tools/probe.mjs shops/<domain>", "untrusted", "CONTRACT.md"]) assert.ok(body.includes(must), must);
 });
 
 for (const [label, names, code] of [
