@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  # The job is called "check" so the branch ruleset can require it by that name.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Tests
+        run: node --test
+      - name: Check every driver folder
+        run: node tools/check.mjs
+      - name: Check the starter templates
+        run: node tools/check.mjs templates/*
+      - name: The index can be generated
+        run: node tools/index.mjs --stdout > /dev/null
+      - name: A pull request touches only one shops/<domain>/ folder
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.base_ref }}
+        run: git diff --name-only "origin/${BASE}...HEAD" | node tools/check.mjs --diff-names

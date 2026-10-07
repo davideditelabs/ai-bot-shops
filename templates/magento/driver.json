@@ -1,0 +1,9 @@
+{
+  "domain": "example.com",
+  "name": "Example",
+  "hosts": [
+    "www.example.com",
+    "example.com"
+  ],
+  "probe": "arroz"
+}

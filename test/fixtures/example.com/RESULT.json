@@ -1,0 +1,8 @@
+{
+  "job": "job-0001",
+  "domain": "example.com",
+  "status": "built",
+  "attempt": 1,
+  "notes": "Built from the json-feed starter.",
+  "files": ["driver.json", "index.mjs"]
+}

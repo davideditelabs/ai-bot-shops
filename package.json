@@ -1,0 +1,14 @@
+{
+  "name": "ai-bot-shops",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shop drivers for AI-Bot: one folder per shop, checked by tools/check.mjs. No dependencies.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test",
+    "check": "node tools/check.mjs",
+    "index": "node tools/index.mjs"
+  }
+}

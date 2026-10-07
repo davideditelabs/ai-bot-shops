@@ -1,0 +1,9 @@
+{
+  "domain": "carrefouruae.com",
+  "name": "Carrefour",
+  "hosts": [
+    "www.carrefouruae.com",
+    "carrefouruae.com"
+  ],
+  "probe": "milk"
+}

@@ -1,0 +1,17 @@
+// Test fixture: a tiny JSON-feed driver for a made-up shop. Stored as index.mjs.txt so `node --test` does not run it as a test file;
+// test/helpers.mjs copies it to index.mjs inside a temporary shops/example.com/.
+const ORIGIN = "https://www.example.com";
+
+export async function run(action, params, http) {
+  if (action !== "search") throw new Error("this driver only searches");
+  const q = String(params.q || "").trim();
+  if (!q) throw new Error("no search word");
+  const r = await http({ method: "GET", url: ORIGIN + "/api/search?q=" + encodeURIComponent(q) });
+  if (r.status !== 200) throw new Error("the shop's search answered " + r.status);
+  const data = JSON.parse(String(r.body));
+  const products = [];
+  for (const item of data.items || []) {
+    products.push({ id: String(item.id), name: item.name, price: item.price, url: ORIGIN + "/p/" + item.id });
+  }
+  return { products: products };
+}
