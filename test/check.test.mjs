@@ -345,3 +345,10 @@ test("every template passes the check", () => {
     assert.equal(r.ownDomainOnly, true, n);
   }
 });
+
+test("a driver whose code never mentions an image gets a note, not a problem", () => {
+  const r = check((d) => write(d, "index.mjs", read(d, "index.mjs").replaceAll("image", "pic")));
+  assert.deepEqual(r.problems, []);
+  assert.match(r.warnings.join(" "), /never sets product\.image/);
+  assert.ok(!check().warnings.some((w) => /image/.test(w)), "the fixture reads images");
+});

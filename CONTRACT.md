@@ -91,11 +91,28 @@ crash: a driver for a word the shop has nothing for returns `{ products: [] }`. 
 | `price` | yes | 1 to 30 characters containing a digit, **exactly as the shop writes it** (`"1,75 €"`, `"12.99 AED"`). Never converted, never invented. |
 | `url` | yes | `https` product page on the shop's own domain or a subdomain, no user name or password, and not a forbidden page (section 5). |
 | `brand`, `size`, `unitPrice` | no | 1 to 80 characters when given. |
-| `image` | no | A URL string. |
+| `image` | no, but expected | The product's photo as an **absolute `https` address on the shop's own domain or one of its subdomains** (the tile's `img`, `og:image` or JSON-LD `image`; a relative address is made absolute in the driver). At most 500 characters, no user name, password or port. See "Product photos" below. |
 | `available` | no | `true` or `false`. |
 
 Unknown fields make the answer invalid. Two searches for the same word must give mostly the same ids (the gate compares them; 80% must
 agree).
+
+### Product photos
+
+The app draws a product card with the photo; without one it draws a grey placeholder with the shop's initials. So a driver should return
+`image` whenever the shop's search page shows a photo for the product.
+
+- **Own domain only, the same rule as `url`.** The gate keeps an `image` only when it is `https`, has no user name, password or port, is at most
+  500 characters, and its host is the shop's `domain` or a subdomain of it (`files.shop.pt` for `shop.pt`). Anything else is dropped without an
+  error and the card shows the placeholder. This is the gate's `safeImage` rule, and `tools/lib/contract.mjs` `ownImage` is the same rule.
+- **A photo on a foreign CDN is not accepted.** The `hosts` list is not widened for photos: a host in `hosts` is a host the driver may *request*
+  (with extra headers) and makes the driver `ownDomainOnly: false`, so listing a CDN there for an `<img>` would buy a wider sandbox for a
+  picture. There is no separate `imageHosts` field either. Leave `image` out when the shop's photos live only on another domain.
+- **The gate never fetches the photo.** It only passes the address on; the phone app loads the picture itself. That is why the address must
+  be the shop's own and why nothing else is allowed.
+- **A missing photo is a note, not a failure.** `tools/probe.mjs` prints a note when no product has an image, when some have none, or when
+  some images are not on the shop's domain (the gate would drop them); `tools/check.mjs` prints a note when `index.mjs` never mentions
+  `image`. A shop that really shows no photos can ignore the note. Neither tool fails on a missing image.
 
 ## 5. `http()` and forbidden pages
 
@@ -142,6 +159,31 @@ The probe word is a **common search word**, never a user's item. It must be one 
 
 The list is part of the contract: it changes only with a contract version. `driver.json` `probe` must be on it, and `tools/probe.mjs`
 only accepts `--word` from it. This keeps what a user shops for out of the library, out of CI logs and out of shops' access logs.
+
+## 7a. Quality
+
+A driver that has the right shape can still be a poor one: a menu instead of the results, three products out of fifty, no photos. The quality
+bar is what a finished driver must meet. `tools/probe.mjs` runs it (use `--quick` only while iterating; a driver is done when the full run
+passes), `tools/lib/quality.mjs` and `tools/lib/truth.mjs` are the rules, and the AI-Bot gate applies the same bar before it accepts a driver
+(`gate/src/shops/driver-quality.ts`). Every failure names the field.
+
+- **Held-out words.** The probe runs the driver's own probe word and then **two more common words** (section 7) that the tool picks: other
+  words of the same language group, chosen by the shop's domain, so the driver cannot be tuned to them. The driver must work for any search word.
+- **Complete** (`products`). At least one of the three words gives **5 or more** products. A shop's search page lists more than a suggestion box;
+  a driver that stops at 3 is reading the wrong thing. (The bar cannot count the shop's page, so "5 for the best word" stands for "the whole list".)
+- **Every product** has a `name`, a `price` above zero **with a currency** (`1,75 €`, `12.99 AED`; a bare `1,75` fails), an `url` on the shop's
+  hosts, an `id` that is the shop's own (not 1, 2, 3 in order), no duplicate ids, and the same ids when the same word is searched twice (80%).
+- **Relevant** (`name`). For each word the shop knows (at least 5 products, at least one name containing the word), **80% or more of the product
+  names contain the search word or a close form** (accents, case and plurals ignored: "Água" matches `agua`). This catches drivers that return
+  menus, ads or related products (when the shop itself pads a list with unrelated products, the driver keeps only those whose name contains the word). A word the shop has fewer than 5 products for is not judged for it (the shop's own fuzzy fallback).
+- **Photos** (`image`). When the shop's answer shows a photo beside the products (a photo address within a short distance of a returned
+  product's name, logos and icons ignored) or the driver returns any, **80% or more of the products carry a valid `image`** (own domain, see
+  "Product photos"). A shop that shows no photos is not asked for them.
+- **True** (section 6). Two sampled products' own pages are opened; each page must show the product's name and its price. A page that shows
+  no price at all (the shop draws it in the browser) is a note, not a failure: the gate opens such pages in a real browser.
+
+`tools/probe.mjs --json` returns the score as `quality`: `productsPerProbe` (words and counts), `imageShare`, `relevanceShare`, `photosShown`.
+The gate records the same four facts per accepted driver (`shop_driver_quality` in its audit, and in `aibot.builder.jobs`).
 
 ## 8. `RESULT.json`
 

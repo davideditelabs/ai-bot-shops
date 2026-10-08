@@ -16,6 +16,8 @@ const ID = /data-product-id="([0-9A-Za-z_-]{1,40})"/i;
 const NAME = /<[^>]*class="[^"]*\bproduct-name\b[^"]*"[^>]*>([\s\S]*?)<\/[a-z0-9]+>/i;
 const PRICE = /<[^>]*class="[^"]*\bproduct-price\b[^"]*"[^>]*>([\s\S]*?)<\/[a-z0-9]+>/i;
 const LINK = /<a\b[^>]*href="([^"#]+)"/i;
+// The tile's photo: the first <img>; lazy-loaded shops keep the real address in data-src. Must end up on the shop's own domain or a subdomain.
+const IMG = /<img\b[^>]*?\b(?:data-src|src)="([^"#]+)"/i;
 
 const text = (html) => String(html).replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&euro;/g, "€").replace(/\s+/g, " ").trim();
 
@@ -46,7 +48,14 @@ export async function run(action, params, http) {
       continue;
     }
     seen[id] = true;
-    products.push({ id: id, name: name, price: price, url: url });
+    const p = { id: id, name: name, price: price, url: url };
+    const img = (IMG.exec(tile) || [])[1];
+    if (img && !/^data:/.test(img)) {
+      try {
+        p.image = new URL(img.replace(/&amp;/g, "&"), ORIGIN).href; // absolute https address; the gate drops it unless it is on the shop's domain
+      } catch (e) {}
+    }
+    products.push(p);
   }
   return { products: products };
 }
