@@ -8,16 +8,28 @@ import { REPO, editJson, makeLib, read, write } from "./helpers.mjs";
 import { guardedHttp, isCommonWord, probeDriver } from "../tools/probe.mjs";
 import { COMMON_WORDS, imageNotes, ownImage } from "../tools/lib/contract.mjs";
 
-const item = (i) => ({ id: 100 + i, name: `Leite ${i}`, price: `1,${10 + i} €` });
-/** A stub shop: three products for "milk" and "leite", nothing for other words. Records every request it receives. */
-function stubNet(calls = []) {
+const cap = (w) => w[0].toUpperCase() + w.slice(1);
+/** What the stub shop sells for a word: `count` products named after the word, each with a photo on the shop's own domain. */
+const item = (i, word = "leite", extra = {}) => ({ id: 100 + i, name: `${cap(word)} Mimosa ${i}`, price: `1,${10 + i} €`, image: `https://www.example.com/img/${100 + i}.jpg`, ...extra });
+/**
+ * A stub shop: `count` products for the words in `known`, nothing for other words; every product page shows its name and price.
+ * `make(word, i)` may change a product. Records every request it receives in `calls`.
+ */
+function stubNet(calls = [], { known = ["milk", "leite"], count = 6, make = (w, i) => item(i, w) } = {}) {
   return async (req) => {
     calls.push(req);
-    const q = new URL(req.url).searchParams.get("q");
-    const items = q === "milk" || q === "leite" ? [item(1), item(2), item(3)] : [];
+    const u = new URL(req.url);
+    if (u.pathname.startsWith("/p/")) {
+      const id = Number(u.pathname.slice(3));
+      const its = known.map((w) => make(w, id - 100));
+      return { status: 200, headers: { "content-type": "text/html" }, body: `<html>${its.map((it) => `<h1>${it.name}</h1>`).join("")}<span class="price">${its[0].price}</span></html>` };
+    }
+    const q = u.searchParams.get("q");
+    const items = known.includes(q) ? Array.from({ length: count }, (_, k) => make(q, k + 1)) : [];
     return { status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ items }) };
   };
 }
+const searchCalls = (calls) => calls.filter((c) => new URL(c.url).pathname === "/api/search");
 
 test("the common-word list is the gate's AUTO_WORDS", () => {
   assert.deepEqual(COMMON_WORDS, ["arroz", "leite", "aveia", "agua", "rice", "milk", "cafe", "protein"]);
@@ -31,9 +43,10 @@ test("a good driver answers the probe word with valid products", async () => {
   const r = await probeDriver({ dir, net: stubNet(calls) });
   assert.equal(r.ok, true, r.errors.join("\n"));
   assert.equal(r.word, "milk");
-  assert.equal(r.products.length, 3);
-  assert.deepEqual(calls.map((c) => c.method), ["GET"]);
-  assert.match(calls[0].url, /^https:\/\/www\.example\.com\/api\/search\?q=milk$/);
+  assert.equal(r.products.length, 6);
+  assert.ok(calls.every((c) => c.method === "GET"));
+  assert.match(searchCalls(calls)[0].url, /^https:\/\/www\.example\.com\/api\/search\?q=milk$/);
+  assert.equal(r.quality.imageShare, 1);
 });
 
 test("the probe word is the driver's own first, then the rest of the list until one gives 3 products", async () => {
@@ -42,8 +55,8 @@ test("the probe word is the driver's own first, then the rest of the list until 
   const r = await probeDriver({ dir, net: stubNet(calls) });
   assert.equal(r.ok, true);
   assert.equal(r.word, "leite");
-  assert.deepEqual(r.tried.map((t) => t.word), ["arroz", "leite"]);
-  assert.deepEqual(calls.map((c) => new URL(c.url).searchParams.get("q")), ["arroz", "leite"]);
+  assert.deepEqual(r.tried.slice(0, 2).map((t) => t.word), ["arroz", "leite"]);
+  assert.deepEqual(searchCalls(calls).slice(0, 2).map((c) => new URL(c.url).searchParams.get("q")), ["arroz", "leite"]);
 });
 
 test("--word uses that word only, and it must be on the list", async () => {
@@ -130,7 +143,7 @@ test("the json-feed and html starters run in the sandbox against stubbed shop an
     const dir = join(root, "shops", "example.com");
     mkdirSync(dir, { recursive: true });
     cpSync(join(REPO, "templates", template), dir, { recursive: true });
-    return probeDriver({ dir, word: "milk", net: async () => ({ status: 200, headers: { "content-type": contentType }, body }) });
+    return probeDriver({ dir, word: "milk", quick: true, net: async () => ({ status: 200, headers: { "content-type": contentType }, body }) });
   };
   const feed = await run("json-feed", JSON.stringify({ items: [1, 2, 3].map((i) => ({ id: i, name: `Milk ${i}`, price: i + 0.5, url: `/p/${i}` })) }), "application/json");
   assert.equal(feed.ok, true, feed.errors.join("\n"));
@@ -169,10 +182,10 @@ test("imageNotes warns, never fails: no photo at all, some missing, or photos th
 
 test("a driver that returns no images passes the probe with a note; one with own images has none", async () => {
   const { dir } = makeLib();
-  const none = await probeDriver({ dir, net: stubNet() });
-  assert.equal(none.ok, true);
+  const none = await probeDriver({ dir, net: stubNet([], { make: (w, i) => item(i, w, { image: undefined }) }) });
+  assert.equal(none.ok, true, none.errors.join("\n"));
   assert.match(none.warnings.join(" "), /no product has an image/);
-  const withImages = await probeDriver({ dir, net: async (req) => ({ status: 200, body: JSON.stringify({ items: [1, 2, 3].map((i) => ({ ...item(i), image: `https://www.example.com/i/${i}.jpg` })) }) }) });
+  const withImages = await probeDriver({ dir, net: stubNet() });
   assert.equal(withImages.ok, true, withImages.errors.join("\n"));
   assert.deepEqual(withImages.warnings, []);
 });

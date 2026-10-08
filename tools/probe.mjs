@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Runs a driver's search against the live shop, the way the AI-Bot gate would, and checks the answer's shape.
-//   node tools/probe.mjs shops/celeiro.pt [--word arroz] [--json]
+//   node tools/probe.mjs shops/celeiro.pt [--word arroz] [--json] [--quick]
+// Without --quick the quality bar runs too (tools/lib/quality.mjs, CONTRACT.md "Quality"): two held-out words, completeness, names, prices, ids,
+// photos and two product pages. --quick skips it, for iterating; a driver is only done when the full run passes.
 // The word comes from the common-word list (never a user's item). Without --word the driver's own probe word is tried first, then the
 // rest of the list, until a word gives at least 3 products (the same as the gate's auto driver). The driver runs in its own Node process
 // under the permission model; its http() is answered here with the gate's restrictions: only hosts in driver.json, https, GET/HEAD,
@@ -11,6 +13,8 @@ import { readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { COMMON_WORDS, NO_PRODUCTS, driverPathRefused, imageNotes, productsOf, readManifest, shopHost } from "./lib/contract.mjs";
+import { heldOutWords, judgeQuality } from "./lib/quality.mjs";
+import { checkProductPage } from "./lib/truth.mjs";
 
 const RUNNER = realpathSync(fileURLToPath(new URL("./runner.mjs", import.meta.url)));
 const READ_METHODS = new Set(["GET", "HEAD"]);
@@ -129,12 +133,76 @@ export function runSearch(dir, word, http, timeoutMs = 20_000) {
 /** Whether the words are ones the probe may use. */
 export const isCommonWord = (w) => COMMON_WORDS.includes(String(w).trim().toLowerCase());
 
+const SAMPLE_PAGES = 2;
+
+/**
+ * The quality bar (CONTRACT.md "Quality") after a driver answered its own probe word: the same word again (the ids must be the same ones), two
+ * held-out common words chosen by the tool, then completeness, names, prices, ids and photos over all of it, and two product pages checked for
+ * their name and price. Returns { failures, notes, tried, score }; failures are plain sentences that name the field.
+ */
+async function qualityBar({ dir, manifest, word, products, http, net, timeoutMs, bodies }) {
+  const failures = [];
+  const notes = [];
+  const tried = [];
+  const runs = [{ word, products }];
+  // Stable ids: the same word twice gives the same products.
+  const again = await runSearch(dir, word, http, timeoutMs);
+  if (again.ok) {
+    const c = productsOf(again.data, manifest);
+    if (c.ok) {
+      const ids = new Set(products.map((p) => p.id));
+      const shared = c.products.filter((p) => ids.has(p.id)).length;
+      if (shared / Math.max(products.length, c.products.length, 1) < 0.8) failures.push('id: two searches for the same word gave different product ids. Use the shop\'s own product id (the sku or the number in the product address), never a position or a random value.');
+    }
+  }
+  for (const w of heldOutWords(manifest.domain, word)) {
+    const r = await runSearch(dir, w, http, timeoutMs);
+    if (!r.ok) {
+      failures.push(`the driver failed on the held-out word "${w}": ${r.error}. It must work for any search word, not only its own probe word.`);
+      tried.push({ word: w, outcome: "run failed" });
+      continue;
+    }
+    const c = productsOf(r.data, manifest);
+    if (!c.ok) {
+      if (c.errors.length === 1 && c.errors[0].startsWith(NO_PRODUCTS)) {
+        runs.push({ word: w, products: [] });
+        tried.push({ word: w, outcome: "no products" });
+      } else {
+        failures.push(...c.errors.map((e) => `"${w}": ${e}`));
+        tried.push({ word: w, outcome: "wrong shape" });
+      }
+      continue;
+    }
+    runs.push({ word: w, products: c.products });
+    tried.push({ word: w, outcome: `${c.products.length} products` });
+  }
+  const judged = judgeQuality(runs, manifest, bodies);
+  failures.push(...judged.failures);
+  // Two product pages: the price on the page is the price in the answer.
+  const picks = [products[0], products[Math.floor(products.length / 2)]].filter((p, i, a) => p && a.indexOf(p) === i).slice(0, SAMPLE_PAGES);
+  for (const p of picks) {
+    const u = new URL(p.url);
+    try {
+      const a = await net({ method: "GET", url: u.href, headers: {} });
+      if (a.status !== 200) failures.push(`product ${p.id}: its page answered ${a.status}, so the product url is not a page that shows the product`);
+      else {
+        const t = checkProductPage(String(a.body), p);
+        if (t.ok === false) failures.push(t.reason);
+        else if (t.ok === null) notes.push(t.reason);
+      }
+    } catch (e) {
+      notes.push(`product ${p.id}: its page could not be read here (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
+  return { failures: failures.slice(0, 12), notes, tried, score: judged.score };
+}
+
 /**
  * Probes the driver in `dir`: reads driver.json, tries the words, validates the product shape.
- * @param {{ dir: string, word?: string, net?: Function, fetchImpl?: Function, timeoutMs?: number }} opts
+ * @param {{ dir: string, word?: string, net?: Function, fetchImpl?: Function, timeoutMs?: number, quick?: boolean }} opts (`quick` skips the quality bar)
  * `warnings` are notes that never fail the probe (for now: product photos). @returns {Promise<{ ok: boolean, domain?: string, word?: string, products?: object[], tried: Array<{word: string, outcome: string}>, errors: string[], warnings: string[] }>}
  */
-export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs }) {
+export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs, quick = false }) {
   const errors = [];
   let raw;
   try {
@@ -147,10 +215,16 @@ export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs }) {
   const { manifest } = read;
   if (word !== undefined && !isCommonWord(word)) return { ok: false, domain: manifest.domain, tried: [], errors: [`the probe word must come from the common-word list (${COMMON_WORDS.join(", ")}), never a user's item`] };
   const words = word !== undefined ? [word.trim().toLowerCase()] : [manifest.probe, ...COMMON_WORDS.filter((w) => w !== manifest.probe)];
-  const http = guardedHttp(manifest, net ?? realNet(manifest, fetchImpl));
+  const netImpl = net ?? realNet(manifest, fetchImpl);
+  const http = guardedHttp(manifest, netImpl);
   const tried = [];
   for (const w of words) {
-    const r = await runSearch(dir, w, http, timeoutMs);
+    const firstBodies = [];
+    const r = await runSearch(dir, w, async (req) => {
+      const a = await http(req);
+      firstBodies.push(a.body);
+      return a;
+    }, timeoutMs);
     if (!r.ok) {
       tried.push({ word: w, outcome: "run failed" });
       errors.push(`the driver failed on "${w}": ${r.error}${r.log ? `\n  its last output: ${r.log}` : ""}`);
@@ -167,7 +241,13 @@ export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs }) {
       return { ok: false, domain: manifest.domain, tried, errors };
     }
     tried.push({ word: w, outcome: `${c.products.length} products` });
-    if (c.products.length >= MIN_PRODUCTS || word !== undefined) return { ok: true, domain: manifest.domain, word: w, products: c.products, tried, errors, warnings: imageNotes(c.products, manifest) };
+    if (c.products.length >= MIN_PRODUCTS || word !== undefined) {
+      const warnings = imageNotes(c.products, manifest);
+      if (quick) return { ok: true, domain: manifest.domain, word: w, products: c.products, tried, errors, warnings: [...warnings, "quick run: the quality bar (held-out words, completeness, relevance, photos, two product pages) was NOT checked"] };
+      const q = await qualityBar({ dir, manifest, word: w, products: c.products, http, net: netImpl, timeoutMs, bodies: firstBodies });
+      if (q.failures.length) return { ok: false, domain: manifest.domain, word: w, products: c.products, tried: [...tried, ...q.tried], errors: q.failures, warnings, quality: q.score };
+      return { ok: true, domain: manifest.domain, word: w, products: c.products, tried: [...tried, ...q.tried], errors, warnings: [...warnings, ...q.notes], quality: q.score };
+    }
   }
   errors.push(`no word on the list gave ${MIN_PRODUCTS} products or more (tried: ${tried.map((t) => `${t.word}: ${t.outcome}`).join(", ")})`);
   return { ok: false, domain: manifest.domain, tried, errors };
@@ -176,18 +256,19 @@ export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs }) {
 async function main() {
   const argv = process.argv.slice(2);
   const json = argv.includes("--json");
+  const quick = argv.includes("--quick");
   const wi = argv.indexOf("--word");
   const word = wi >= 0 ? argv[wi + 1] : undefined;
   const dirs = argv.filter((a, i) => !a.startsWith("--") && !(wi >= 0 && i === wi + 1));
   if (dirs.length !== 1) {
-    console.error("usage: node tools/probe.mjs shops/<domain> [--word w] [--json]");
+    console.error("usage: node tools/probe.mjs shops/<domain> [--word w] [--json] [--quick]");
     process.exitCode = 2;
     return;
   }
-  const r = await probeDriver({ dir: resolve(dirs[0]), ...(word !== undefined ? { word } : {}) });
+  const r = await probeDriver({ dir: resolve(dirs[0]), ...(word !== undefined ? { word } : {}), quick });
   if (json) console.log(JSON.stringify(r, null, 2));
   else if (r.ok) {
-    console.log(`OK: ${dirs[0]} answered "${r.word}" with ${r.products.length} products`);
+    console.log(`OK: ${dirs[0]} answered "${r.word}" with ${r.products.length} products${r.quality ? ` (quality: ${r.quality.productsPerProbe.map((x) => `${x.word} ${x.products}`).join(", ")}; images ${Math.round(r.quality.imageShare * 100)}%; relevant ${Math.round(r.quality.relevanceShare * 100)}%)` : ""}`);
     for (const p of r.products.slice(0, 3)) console.log(`  ${p.id}  ${p.name}  ${p.price}  ${p.url}${p.image ? `  [image: ${p.image}]` : ""}`);
     for (const w of r.warnings) console.log(`  note: ${w}`);
   } else {
