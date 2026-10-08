@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { REPO, editJson, makeLib, read, remove, withCode, write } from "./helpers.mjs";
@@ -302,10 +302,11 @@ for (const [label, names, code] of [
 
 const cli = (args, opts = {}) => spawnSync(process.execPath, [join(REPO, "tools", "check.mjs"), ...args], { encoding: "utf8", ...opts });
 
-test("cli: no arguments passes on the repo's empty shops/", () => {
+test("cli: no arguments passes on the repo's own shops/, however many drivers it holds", () => {
   const r = cli([], { cwd: REPO });
   assert.equal(r.status, 0, r.stdout + r.stderr);
-  assert.match(r.stdout, /OK: 0 folders checked/);
+  const n = existsSync(join(REPO, "shops")) ? readdirSync(join(REPO, "shops"), { withFileTypes: true }).filter((e) => e.isDirectory()).length : 0;
+  assert.match(r.stdout, new RegExp(`OK: ${n} folders? checked`));
 });
 
 test("cli: a bad folder exits non-zero, lists every problem with its fix, and --json reports ownDomainOnly", () => {
