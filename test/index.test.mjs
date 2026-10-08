@@ -106,8 +106,10 @@ test("a contract version in PROVENANCE.json is carried over", () => {
   assert.equal(read(join(root, "shops", "example.com"), "PROVENANCE.json").includes('"contract": 1'), true);
 });
 
-test("cli: --stdout prints the index of the repo's empty library", () => {
+test("cli: --stdout prints the index of the repo's own library, however many drivers it holds", () => {
   const r = spawnSync(process.execPath, [join(REPO, "tools", "index.mjs"), "--stdout", "--commit", "deadbeef"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
-  assert.deepEqual(JSON.parse(r.stdout), { contract: 1, commit: "deadbeef", count: 0, drivers: [] });
+  const out = JSON.parse(r.stdout);
+  assert.deepEqual(out, buildIndex({ root: REPO, commit: "deadbeef" }));
+  assert.equal(out.count, out.drivers.length);
 });
