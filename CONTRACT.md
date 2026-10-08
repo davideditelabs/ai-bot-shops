@@ -91,11 +91,28 @@ crash: a driver for a word the shop has nothing for returns `{ products: [] }`. 
 | `price` | yes | 1 to 30 characters containing a digit, **exactly as the shop writes it** (`"1,75 €"`, `"12.99 AED"`). Never converted, never invented. |
 | `url` | yes | `https` product page on the shop's own domain or a subdomain, no user name or password, and not a forbidden page (section 5). |
 | `brand`, `size`, `unitPrice` | no | 1 to 80 characters when given. |
-| `image` | no | A URL string. |
+| `image` | no, but expected | The product's photo as an **absolute `https` address on the shop's own domain or one of its subdomains** (the tile's `img`, `og:image` or JSON-LD `image`; a relative address is made absolute in the driver). At most 500 characters, no user name, password or port. See "Product photos" below. |
 | `available` | no | `true` or `false`. |
 
 Unknown fields make the answer invalid. Two searches for the same word must give mostly the same ids (the gate compares them; 80% must
 agree).
+
+### Product photos
+
+The app draws a product card with the photo; without one it draws a grey placeholder with the shop's initials. So a driver should return
+`image` whenever the shop's search page shows a photo for the product.
+
+- **Own domain only, the same rule as `url`.** The gate keeps an `image` only when it is `https`, has no user name, password or port, is at most
+  500 characters, and its host is the shop's `domain` or a subdomain of it (`files.shop.pt` for `shop.pt`). Anything else is dropped without an
+  error and the card shows the placeholder. This is the gate's `safeImage` rule, and `tools/lib/contract.mjs` `ownImage` is the same rule.
+- **A photo on a foreign CDN is not accepted.** The `hosts` list is not widened for photos: a host in `hosts` is a host the driver may *request*
+  (with extra headers) and makes the driver `ownDomainOnly: false`, so listing a CDN there for an `<img>` would buy a wider sandbox for a
+  picture. There is no separate `imageHosts` field either. Leave `image` out when the shop's photos live only on another domain.
+- **The gate never fetches the photo.** It only passes the address on; the phone app loads the picture itself. That is why the address must
+  be the shop's own and why nothing else is allowed.
+- **A missing photo is a note, not a failure.** `tools/probe.mjs` prints a note when no product has an image, when some have none, or when
+  some images are not on the shop's domain (the gate would drop them); `tools/check.mjs` prints a note when `index.mjs` never mentions
+  `image`. A shop that really shows no photos can ignore the note. Neither tool fails on a missing image.
 
 ## 5. `http()` and forbidden pages
 

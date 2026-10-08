@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMMON_WORDS, NO_PRODUCTS, driverPathRefused, productsOf, readManifest, shopHost } from "./lib/contract.mjs";
+import { COMMON_WORDS, NO_PRODUCTS, driverPathRefused, imageNotes, productsOf, readManifest, shopHost } from "./lib/contract.mjs";
 
 const RUNNER = realpathSync(fileURLToPath(new URL("./runner.mjs", import.meta.url)));
 const READ_METHODS = new Set(["GET", "HEAD"]);
@@ -132,7 +132,7 @@ export const isCommonWord = (w) => COMMON_WORDS.includes(String(w).trim().toLowe
 /**
  * Probes the driver in `dir`: reads driver.json, tries the words, validates the product shape.
  * @param {{ dir: string, word?: string, net?: Function, fetchImpl?: Function, timeoutMs?: number }} opts
- * @returns {Promise<{ ok: boolean, domain?: string, word?: string, products?: object[], tried: Array<{word: string, outcome: string}>, errors: string[] }>}
+ * `warnings` are notes that never fail the probe (for now: product photos). @returns {Promise<{ ok: boolean, domain?: string, word?: string, products?: object[], tried: Array<{word: string, outcome: string}>, errors: string[], warnings: string[] }>}
  */
 export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs }) {
   const errors = [];
@@ -167,7 +167,7 @@ export async function probeDriver({ dir, word, net, fetchImpl, timeoutMs }) {
       return { ok: false, domain: manifest.domain, tried, errors };
     }
     tried.push({ word: w, outcome: `${c.products.length} products` });
-    if (c.products.length >= MIN_PRODUCTS || word !== undefined) return { ok: true, domain: manifest.domain, word: w, products: c.products, tried, errors };
+    if (c.products.length >= MIN_PRODUCTS || word !== undefined) return { ok: true, domain: manifest.domain, word: w, products: c.products, tried, errors, warnings: imageNotes(c.products, manifest) };
   }
   errors.push(`no word on the list gave ${MIN_PRODUCTS} products or more (tried: ${tried.map((t) => `${t.word}: ${t.outcome}`).join(", ")})`);
   return { ok: false, domain: manifest.domain, tried, errors };
@@ -188,7 +188,8 @@ async function main() {
   if (json) console.log(JSON.stringify(r, null, 2));
   else if (r.ok) {
     console.log(`OK: ${dirs[0]} answered "${r.word}" with ${r.products.length} products`);
-    for (const p of r.products.slice(0, 3)) console.log(`  ${p.id}  ${p.name}  ${p.price}  ${p.url}`);
+    for (const p of r.products.slice(0, 3)) console.log(`  ${p.id}  ${p.name}  ${p.price}  ${p.url}${p.image ? `  [image: ${p.image}]` : ""}`);
+    for (const w of r.warnings) console.log(`  note: ${w}`);
   } else {
     console.log(`FAILED: ${dirs[0]}`);
     for (const e of r.errors) console.log(`  - ${e}`);

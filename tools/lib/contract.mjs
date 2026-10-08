@@ -148,3 +148,46 @@ export function productsOf(data, manifest) {
   });
   return errors.length ? { ok: false, errors: errors.slice(0, 12) } : { ok: true, products };
 }
+
+// ---------------------------------------------------------------- product photos
+
+const MAX_IMAGE_URL = 500;
+
+/**
+ * The product photo the gate would keep (gate/src/shops/sfcc.ts safeImage): an absolute https URL of at most 500 characters, no user name,
+ * password or port, on the shop's domain or one of its subdomains. Anything else is dropped by the gate and the app draws its placeholder.
+ * The app fetches the photo itself; the gate never does, which is why the rule is "own domain" and a foreign CDN is not accepted.
+ * @returns {string|undefined} the URL when it would be kept
+ */
+export function ownImage(raw, manifest) {
+  if (typeof raw !== "string") return undefined;
+  const t = raw.trim();
+  if (!t || t.length > MAX_IMAGE_URL) return undefined;
+  let u;
+  try {
+    u = new URL(t);
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== "https:" || u.username || u.password || u.port) return undefined;
+  return shopHost(manifest.domain, u.hostname.toLowerCase()) ? u.href : undefined;
+}
+
+/**
+ * Notes (never failures) about the photos of a valid answer: none at all, some missing, or some the gate would drop.
+ * A shop that really shows no photos can ignore the first two.
+ * @returns {string[]}
+ */
+export function imageNotes(products, manifest) {
+  const notes = [];
+  const total = products.length;
+  const given = products.filter((p) => typeof p.image === "string" && p.image.trim());
+  if (!given.length) {
+    notes.push("no product has an image. If the shop's search page shows product photos, read them (the tile's img, og:image or JSON-LD image) so the app can draw them instead of a placeholder. If the shop really shows no photos, ignore this note.");
+    return notes;
+  }
+  if (given.length < total) notes.push(`${total - given.length} of ${total} products have no image. If the shop shows a photo for them, read it too.`);
+  const foreign = given.filter((p) => !ownImage(p.image, manifest)).length;
+  if (foreign) notes.push(`${foreign} of ${given.length} images are not on ${manifest.domain} or a subdomain (https, absolute, no port, at most ${MAX_IMAGE_URL} characters): the gate drops them and the app draws a placeholder. Use the shop's own photo address, or leave image out.`);
+  return notes;
+}

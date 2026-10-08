@@ -340,6 +340,7 @@ export function checkFolder(dir, label = dir) {
     const src = files.get("index.mjs").toString("utf8");
     for (const p of scanCode(new Map([["index.mjs", src]]))) add("index.mjs", "scan", p.message, p.fix);
     if (!/export\s+(?:async\s+)?function\s+run\b|export\s+const\s+run\b|export\s*\{[^}]*\brun\b[^}]*\}/.test(src)) add("index.mjs", "no-run", "index.mjs must export a function named run", "Export async function run(action, params, http) { ... } and return { products: [...] } for action \"search\".");
+    if (!/\bimage\b/.test(src)) warnings.push("index.mjs never sets product.image. If the shop's search page shows product photos, read them (absolute https address on the shop's own domain) so the app can draw them; if it shows none, ignore this note");
     for (const h of forbiddenPathsIn(src)) add("index.mjs", "forbidden-path", `line ${h.line}: "${h.value}" names a basket, checkout, payment, order, account or login page`, "Remove it. A driver only reads search and product pages: never a basket, checkout, payment, order, account or login address, and never ?add-to-cart style queries.");
   }
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { REPO, editJson, makeLib, read, write } from "./helpers.mjs";
 import { guardedHttp, isCommonWord, probeDriver } from "../tools/probe.mjs";
-import { COMMON_WORDS } from "../tools/lib/contract.mjs";
+import { COMMON_WORDS, imageNotes, ownImage } from "../tools/lib/contract.mjs";
 
 const item = (i) => ({ id: 100 + i, name: `Leite ${i}`, price: `1,${10 + i} €` });
 /** A stub shop: three products for "milk" and "leite", nothing for other words. Records every request it receives. */
@@ -139,4 +139,40 @@ test("the json-feed and html starters run in the sandbox against stubbed shop an
   const page = await run("html", `<ul>${html}</ul>`, "text/html");
   assert.equal(page.ok, true, page.errors.join("\n"));
   assert.equal(page.products.length, 3);
+});
+
+const shop = { domain: "example.com", hosts: ["www.example.com", "example.com"], probe: "milk", name: "Example" };
+
+test("ownImage keeps an https photo on the shop's domain or a subdomain and nothing else (the gate's safeImage rule)", () => {
+  assert.equal(ownImage("https://www.example.com/i/1.jpg", shop), "https://www.example.com/i/1.jpg");
+  assert.equal(ownImage("https://files.example.com/i/1.jpg", shop), "https://files.example.com/i/1.jpg");
+  assert.equal(ownImage("/i/1.jpg", shop), undefined, "absolute URLs only in a driver's answer");
+  assert.equal(ownImage("http://www.example.com/i/1.jpg", shop), undefined);
+  assert.equal(ownImage("https://cdn.other.net/i/1.jpg", shop), undefined);
+  assert.equal(ownImage("https://notexample.com/i/1.jpg", shop), undefined);
+  assert.equal(ownImage("https://u:p@www.example.com/i.jpg", shop), undefined);
+  assert.equal(ownImage("https://www.example.com:8443/i.jpg", shop), undefined);
+  assert.equal(ownImage(`https://www.example.com/${"a".repeat(500)}`, shop), undefined);
+  assert.equal(ownImage(5, shop), undefined);
+});
+
+test("imageNotes warns, never fails: no photo at all, some missing, or photos the gate would drop", () => {
+  const p = (i, image) => ({ id: String(i), name: `Milk ${i}`, price: "1 €", url: "https://www.example.com/p", ...(image ? { image } : {}) });
+  const good = "https://www.example.com/i.jpg";
+  assert.deepEqual(imageNotes([p(1, good), p(2, good)], shop), []);
+  assert.match(imageNotes([p(1), p(2)], shop).join(" "), /no product has an image.*shop really shows no photos/i);
+  assert.match(imageNotes([p(1, good), p(2)], shop).join(" "), /1 of 2 products have no image/);
+  const foreign = imageNotes([p(1, "https://cdn.other.net/i.jpg"), p(2, good)], shop).join(" ");
+  assert.match(foreign, /1 of 2 images are not on example\.com or a subdomain/);
+  assert.match(foreign, /drops them/);
+});
+
+test("a driver that returns no images passes the probe with a note; one with own images has none", async () => {
+  const { dir } = makeLib();
+  const none = await probeDriver({ dir, net: stubNet() });
+  assert.equal(none.ok, true);
+  assert.match(none.warnings.join(" "), /no product has an image/);
+  const withImages = await probeDriver({ dir, net: async (req) => ({ status: 200, body: JSON.stringify({ items: [1, 2, 3].map((i) => ({ ...item(i), image: `https://www.example.com/i/${i}.jpg` })) }) }) });
+  assert.equal(withImages.ok, true, withImages.errors.join("\n"));
+  assert.deepEqual(withImages.warnings, []);
 });
