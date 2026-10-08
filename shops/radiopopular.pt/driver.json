@@ -1,0 +1,6 @@
+{
+  "domain": "radiopopular.pt",
+  "name": "Radio Popular",
+  "hosts": ["www.radiopopular.pt", "radiopopular.pt"],
+  "probe": "arroz"
+}

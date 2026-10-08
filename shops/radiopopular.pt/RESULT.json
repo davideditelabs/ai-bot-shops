@@ -1,0 +1,1 @@
+{ "job": "57d34ce8", "domain": "radiopopular.pt", "status": "built", "attempt": 1, "notes": "Built from the html starter: reads the schema.org product blocks on the shop's search page. The probe word arroz returns 12 products.", "files": ["driver.json", "index.mjs", "PROVENANCE.json", "RESULT.json"] }
